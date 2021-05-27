@@ -1,0 +1,41 @@
+version: "3.4"
+services: 
+  jaeger: 
+    container_name: jaeger
+    image: jaegertracing/all-in-one:latest
+    networks: 
+      - tracing
+    ports: 
+      - 16686:16686
+      - 14269:14269
+  flight-db:
+    image: mysql:latest
+    container_name: flight-db
+    networks: 
+      - tracing
+    ports:
+      - 3306:3306
+    volumes:
+      - ./flight-db/flight.sql:/docker-entrypoint-initdb.d/dump.sql
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: flight
+      MYSQL_USER: user
+      MYSQL_PASSWORD: password
+  passenger-db:
+    image: mysql:latest
+    container_name: passenger-db
+    networks: 
+      - tracing
+    ports:
+      - 3307:3306
+    volumes:
+      - ./passenger-db/passenger.sql:/docker-entrypoint-initdb.d/dump.sql
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: passenger
+      MYSQL_USER: user
+      MYSQL_PASSWORD: password
+networks: 
+  tracing:
+    name: tracing
