@@ -6,8 +6,9 @@ services:
     networks: 
       - tracing
     ports: 
-      - 16686:16686
-      - 14269:14269
+      - "16686:16686"
+      - "14269:14269"
+      - "6831:6831/udp"
   flight-db:
     image: mysql:latest
     container_name: flight-db
@@ -19,7 +20,7 @@ services:
       - ./flight-db/flight.sql:/docker-entrypoint-initdb.d/dump.sql
     environment:
       MYSQL_ROOT_PASSWORD: secret
-      MYSQL_DATABASE: flight
+      MYSQL_DATABASE: flights
       MYSQL_USER: user
       MYSQL_PASSWORD: password
   passenger-db:
@@ -33,9 +34,18 @@ services:
       - ./passenger-db/passenger.sql:/docker-entrypoint-initdb.d/dump.sql
     environment:
       MYSQL_ROOT_PASSWORD: secret
-      MYSQL_DATABASE: passenger
+      MYSQL_DATABASE: passengers
       MYSQL_USER: user
       MYSQL_PASSWORD: password
+  flight-service:
+    container_name: flight-service
+    build:
+      context: ./flight-service
+    ports:
+      - 8080:8080
+    networks:
+      - tracing
+
 networks: 
   tracing:
     name: tracing
