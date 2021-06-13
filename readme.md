@@ -24,7 +24,9 @@ Learn more about OpenTelemetry [here](https://opentelemetry.io/)
 2. Run ``docker-compose up`` in jaeger-example directory
 3. Make a request defined in any of the apis below 
 4. Navigate to to [jaeger ui](http://localhost:16686/search)
-5. Select ``flight-service`` or ``passenger-service`` in the search to see all spans collected
+5. Select ``flight-service`` or ``passenger-service`` in the `services` dropdown menu
+6. Click `Find traces`
+7. Select a trace to view it's timeline
 
 ## Flight service API
 ### Get flight
