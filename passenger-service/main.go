@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/opentracing/opentracing-go"
 	"github.com/opentracing/opentracing-go/ext"
@@ -10,13 +11,17 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"io"
-	"net/http"
-	"strconv"
+	"os"
 	"strings"
 	"time"
 )
 
-var db *gorm.DB
+var (
+	JAEGER_HOST_PORT = os.Getenv("JAEGER_HOST_PORT")
+	SERVICE_PORT = os.Getenv("SERVICE_PORT")
+	MYSQL_HOST = os.Getenv("MYSQL_HOST")
+	MYSQL_PORT = os.Getenv("MYSQL_PORT")
+)
 
 type Passenger struct {
 	PassengerID int
@@ -26,44 +31,50 @@ type Passenger struct {
 }
 
 func main() {
-	connectDb()
-	_, err := initializeTracer()
+	db := connect()
+	closer, err := initTracer()
 	if err != nil {
 		logrus.Fatalf("could not initialize tracing: %v", err)
 	}
+	defer closer.Close()
 
 	r := gin.Default()
-	r.GET("/api/passenger-service/passenger-v1", getPassengers)
+	r.GET("/api/passenger-service/passenger-v1", getPassengers(db))
 
-	err = r.Run(":8080")
+	err = r.Run(fmt.Sprintf(":%s", SERVICE_PORT))
 	if err != nil {
 		logrus.Fatalf("could not start http server: %v", err)
 	}
 	logrus.Info("server started on port 8080")
 }
 
-func getPassengers(c *gin.Context) {
-	flightID, err := strconv.Atoi(c.Query("flightId"))
-	if err != nil {
-		c.AbortWithStatus(http.StatusBadRequest)
-		return
+func getPassengers(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		flightID := c.Query("flightId")
+
+		tracer := opentracing.GlobalTracer()
+		reqCtx, _ := tracer.Extract(opentracing.HTTPHeaders, opentracing.HTTPHeadersCarrier(c.Request.Header))
+		parentSpan := tracer.StartSpan("passenger-service GET /", ext.RPCServerOption(reqCtx))
+		defer parentSpan.Finish()
+
+		ctx := opentracing.ContextWithSpan(c, parentSpan, )
+
+		selectSpan, ctx := opentracing.StartSpanFromContext(ctx, "passenger-service: MySQL Select Passengers")
+		var passengers []Passenger
+		if flightID != "" {
+			db.Where("flight_id = ?", flightID).Find(&passengers)
+			c.JSON(200, passengers)
+			selectSpan.Finish()
+			return
+		}
+		db.Find(&passengers)
+		selectSpan.Finish()
+
+		c.JSON(200, passengers)
 	}
-	tracer := opentracing.GlobalTracer()
-	reqCtx, _ := tracer.Extract(opentracing.HTTPHeaders, opentracing.HTTPHeadersCarrier(c.Request.Header))
-	parentSpan := tracer.StartSpan("passenger-service GET /", ext.RPCServerOption(reqCtx))
-	defer parentSpan.Finish()
-
-	ctx := opentracing.ContextWithSpan(c, parentSpan, )
-
-	selectSpan, ctx := opentracing.StartSpanFromContext(ctx, "passenger-service: MySQL Select Passengers")
-	var passengers []Passenger
-	db.Where("flight_id = ?", flightID).Find(&passengers)
-	selectSpan.Finish()
-
-	c.JSON(200, passengers)
 }
 
-func initializeTracer() (io.Closer, error) {
+func initTracer() (io.Closer, error) {
 	cfg := config.Configuration{
 		ServiceName: "passenger-service",
 		Sampler:     &config.SamplerConfig{
@@ -72,7 +83,7 @@ func initializeTracer() (io.Closer, error) {
 		},
 		Reporter:    &config.ReporterConfig{
 			LogSpans: true,
-			LocalAgentHostPort: "jaeger:6831",
+			LocalAgentHostPort: JAEGER_HOST_PORT,
 		},
 	}
 
@@ -85,8 +96,9 @@ func initializeTracer() (io.Closer, error) {
 }
 
 var retries = 0
-func connectDb() {
-	con, err := gorm.Open(mysql.Open("root:secret@tcp(passenger-db:3306)/passengers?charset=utf8mb4&parseTime=True&loc=Local"), &gorm.Config{})
+func connect() *gorm.DB {
+	dsn := fmt.Sprintf("root:secret@tcp(%s:%s)/passengers?charset=utf8mb4&parseTime=True&loc=Local", MYSQL_HOST, MYSQL_PORT)
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil && strings.Contains(err.Error(), "connection refused") {
 		if retries >= 10 {
 			logrus.Fatalf("could not connect to database: %v", err)
@@ -94,11 +106,10 @@ func connectDb() {
 		retries++
 		logrus.Warnf("connection to database failed. Retry %d", retries)
 		time.Sleep(20 * time.Second)
-		connectDb()
-		return
+		return connect()
 	}
 	if err != nil {
 		logrus.Fatalf("could not connect to database: %v", err)
 	}
-	db = con
+	return db
 }

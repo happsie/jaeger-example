@@ -14,12 +14,18 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
-var db *gorm.DB
+var (
+	JAEGER_HOST_PORT = os.Getenv("JAEGER_HOST_PORT")
+	SERVICE_PORT = os.Getenv("SERVICE_PORT")
+	MYSQL_HOST = os.Getenv("MYSQL_HOST")
+	MYSQL_PORT = os.Getenv("MYSQL_PORT")
+)
 
 type Flight struct {
 	FlightID    int
@@ -36,41 +42,44 @@ type Passenger struct {
 }
 
 func main() {
-	connectDb()
-	_, err := initializeTracer()
+	db := connect()
+	closer, err := initTracer()
 	if err != nil {
 		logrus.Fatalf("could not initialize tracing: %v", err)
 	}
+	defer closer.Close()
 
 	r := gin.Default()
-	r.GET("/api/flight-service/flight-v1/:ID", getFlight)
+	r.GET("/api/flight-service/flight-v1/:ID", getFlight(db))
 
-	err = r.Run(":8080")
+	err = r.Run(fmt.Sprintf(":%s", SERVICE_PORT))
 	if err != nil {
 		logrus.Fatalf("could not start http server: %v", err)
 	}
 	logrus.Info("server started on port 8080")
 }
 
-func getFlight(c *gin.Context) {
-	ID, err := strconv.Atoi(c.Param("ID"))
-	if err != nil {
-		c.AbortWithStatus(http.StatusBadRequest)
-		return
+func getFlight(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ID, err := strconv.Atoi(c.Param("ID"))
+		if err != nil {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+		tracer := opentracing.GlobalTracer()
+		parentSpan := tracer.StartSpan("flight-service GET /:ID")
+		defer parentSpan.Finish()
+
+		ctx := opentracing.ContextWithSpan(c, parentSpan)
+
+		selectSpan, ctx := opentracing.StartSpanFromContext(ctx, "flight-service: MySQL Select Flight")
+		flight := Flight{}
+		db.Find(&flight, ID)
+		selectSpan.Finish()
+
+		flight.Passengers = findPassengers(ID, ctx)
+		c.JSON(200, flight)
 	}
-	tracer := opentracing.GlobalTracer()
-	parentSpan := tracer.StartSpan("flight-service GET /:ID")
-	defer parentSpan.Finish()
-
-	ctx := opentracing.ContextWithSpan(c, parentSpan)
-
-	selectSpan, ctx := opentracing.StartSpanFromContext(ctx, "flight-service: MySQL Select Flight")
-	flight := Flight{}
-	db.Find(&flight, ID)
-	selectSpan.Finish()
-
-	flight.Passengers = findPassengers(ID, ctx)
-	c.JSON(200, flight)
 }
 
 func findPassengers(flightID int, ctx context.Context) []Passenger {
@@ -112,7 +121,7 @@ func findPassengers(flightID int, ctx context.Context) []Passenger {
 	return passengers
 }
 
-func initializeTracer() (io.Closer, error) {
+func initTracer() (io.Closer, error) {
 	cfg := config.Configuration{
 		ServiceName: "flight-service",
 		Sampler: &config.SamplerConfig{
@@ -121,7 +130,7 @@ func initializeTracer() (io.Closer, error) {
 		},
 		Reporter: &config.ReporterConfig{
 			LogSpans:           true,
-			LocalAgentHostPort: "jaeger:6831",
+			LocalAgentHostPort: JAEGER_HOST_PORT,
 		},
 	}
 
@@ -134,9 +143,9 @@ func initializeTracer() (io.Closer, error) {
 }
 
 var retries = 0
-func connectDb() {
-	con, err := gorm.Open(mysql.Open("root:secret@tcp(flight-db:3306)/flights?charset=utf8mb4&parseTime=True&loc=Local"), &gorm.Config{})
-	// Resilient reconnect to db. Starting with docker-compose needs to wait for mysql too accept connection
+func connect() *gorm.DB {
+	dsn := fmt.Sprintf("root:secret@tcp(%s:%s)/flights?charset=utf8mb4&parseTime=True&loc=Local", MYSQL_HOST, MYSQL_PORT)
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil && strings.Contains(err.Error(), "connection refused") {
 		if retries >= 10 {
 			logrus.Fatalf("could not connectDb to database: %v", err)
@@ -144,11 +153,10 @@ func connectDb() {
 		retries++
 		logrus.Warnf("connection to database failed. Retry %d", retries)
 		time.Sleep(20 * time.Second)
-		connectDb()
-		return
+		return connect()
 	}
 	if err != nil {
 		logrus.Fatalf("could not connect to database: %v", err)
 	}
-	db = con
+	return db
 }

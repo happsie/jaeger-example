@@ -12,8 +12,6 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: secret
       MYSQL_DATABASE: flights
-      MYSQL_USER: user
-      MYSQL_PASSWORD: password
   passenger-db:
     image: mysql:latest
     container_name: passenger-db
@@ -26,8 +24,6 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: secret
       MYSQL_DATABASE: passengers
-      MYSQL_USER: user
-      MYSQL_PASSWORD: password
   flight-service:
     container_name: flight-service
     build:
@@ -38,6 +34,11 @@ services:
       - tracing
     depends_on:
       - jaeger
+    environment:
+      - "JAEGER_HOST_PORT=jaeger:6831"
+      - "SERVICE_PORT=8080"
+      - "MYSQL_HOST=flight-db"
+      - "MYSQL_PORT=3306"
   passenger-service:
     container_name: passenger-service
     build:
@@ -48,6 +49,11 @@ services:
       - tracing
     depends_on:
       - jaeger
+    environment:
+      - "JAEGER_HOST_PORT=jaeger:6831"
+      - "SERVICE_PORT=8080"
+      - "MYSQL_HOST=passenger-db"
+      - "MYSQL_PORT=3306"
   jaeger:
     container_name: jaeger
     image: jaegertracing/all-in-one:latest
