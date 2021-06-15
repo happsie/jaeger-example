@@ -11,7 +11,9 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"io"
+	"math/rand"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,6 +23,7 @@ var (
 	SERVICE_PORT = os.Getenv("SERVICE_PORT")
 	MYSQL_HOST = os.Getenv("MYSQL_HOST")
 	MYSQL_PORT = os.Getenv("MYSQL_PORT")
+	UNSTABLE = os.Getenv("UNSTABLE")
 )
 
 type Passenger struct {
@@ -55,11 +58,26 @@ func getPassengers(db *gorm.DB) gin.HandlerFunc {
 		tracer := opentracing.GlobalTracer()
 		reqCtx, _ := tracer.Extract(opentracing.HTTPHeaders, opentracing.HTTPHeadersCarrier(c.Request.Header))
 		parentSpan := tracer.StartSpan("passenger-service GET /", ext.RPCServerOption(reqCtx))
+		parentSpan.SetTag("flightId", flightID)
 		defer parentSpan.Finish()
 
-		ctx := opentracing.ContextWithSpan(c, parentSpan, )
+		unstable, _ := strconv.ParseBool(UNSTABLE)
+		if unstable == true {
+			rand.Seed(time.Now().UnixNano())
+			if rand.Intn(5-1)+1 == 3 {
+				parentSpan.SetTag("error", true)
+				c.AbortWithError(500, fmt.Errorf("passenger-service is unstable"))
+				return
+			}
+		}
 
+		ctx := opentracing.ContextWithSpan(c, parentSpan, )
 		selectSpan, ctx := opentracing.StartSpanFromContext(ctx, "passenger-service: MySQL Select Passengers")
+		selectSpan.SetTag("database type", db.Name())
+		selectSpan.SetTag("database host", MYSQL_HOST)
+		selectSpan.SetTag("database port", MYSQL_PORT)
+		selectSpan.SetTag("database schema", "passengers")
+		selectSpan.SetTag("flight id", flightID)
 		var passengers []Passenger
 		if flightID != "" {
 			db.Where("flight_id = ?", flightID).Find(&passengers)

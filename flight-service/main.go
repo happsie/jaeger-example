@@ -68,27 +68,36 @@ func getFlight(db *gorm.DB) gin.HandlerFunc {
 		}
 		tracer := opentracing.GlobalTracer()
 		parentSpan := tracer.StartSpan("flight-service GET /:ID")
+		parentSpan.SetTag("flight id", ID)
 		defer parentSpan.Finish()
 
 		ctx := opentracing.ContextWithSpan(c, parentSpan)
 
 		selectSpan, ctx := opentracing.StartSpanFromContext(ctx, "flight-service: MySQL Select Flight")
+		selectSpan.SetTag("database type", db.Name())
+		selectSpan.SetTag("database host", MYSQL_HOST)
+		selectSpan.SetTag("database port", MYSQL_PORT)
+		selectSpan.SetTag("database schema", "passengers")
+		selectSpan.SetTag("flight id", ID)
 		flight := Flight{}
 		db.Find(&flight, ID)
 		selectSpan.Finish()
 
-		flight.Passengers = findPassengers(ID, ctx)
+		passengers, _ := findPassengers(ID, ctx)
+		flight.Passengers = passengers
 		c.JSON(200, flight)
 	}
 }
 
-func findPassengers(flightID int, ctx context.Context) []Passenger {
+func findPassengers(flightID int, ctx context.Context) ([]Passenger, error) {
 	url := fmt.Sprintf("http://passenger-service:8080/api/passenger-service/passenger-v1?flightId=%d", flightID)
-	span, ctx := opentracing.StartSpanFromContext(ctx, "flight-service: passenger-service GET /api/passenger-service/passenger-v1" + url)
+	span, ctx := opentracing.StartSpanFromContext(ctx, "flight-service: passenger-service GET /api/passenger-service/passenger-v1")
+	span.SetTag("flight id", flightID)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		logrus.Errorf("failed to initialize request: %v", err)
-		return []Passenger{}
+		span.SetTag("error", true)
+		return []Passenger{}, err
 	}
 	err = span.Tracer().Inject(
 		span.Context(),
@@ -101,24 +110,27 @@ func findPassengers(flightID int, ctx context.Context) []Passenger {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		span.SetTag("error", true)
 		logrus.Errorf("failed to get passengers: %v", err)
-		return []Passenger{}
+		return []Passenger{}, err
 	}
 	span.Finish()
 
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
+		span.SetTag("error", true)
 		logrus.Errorf("could not read response body: %v", err)
-		return []Passenger{}
+		return []Passenger{}, err
 	}
 	var passengers []Passenger
 	err = json.Unmarshal(body, &passengers)
 	if err != nil {
+		span.SetTag("error", true)
 		logrus.Errorf("could not unmarshal response body: %v", err)
-		return []Passenger{}
+		return []Passenger{}, err
 	}
-	return passengers
+	return passengers, nil
 }
 
 func initTracer() (io.Closer, error) {

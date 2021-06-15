@@ -54,6 +54,7 @@ services:
       - "SERVICE_PORT=8080"
       - "MYSQL_HOST=passenger-db"
       - "MYSQL_PORT=3306"
+      - "UNSTABLE=false"
   jaeger:
     container_name: jaeger
     image: jaegertracing/all-in-one:latest
