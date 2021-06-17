@@ -18,7 +18,7 @@ Learn more about OpenTelemetry [here](https://opentelemetry.io/)
 | passenger-service  | Go service             | 8090                       | 8080                   |
 
 ## Running
-**_Running this project requires [docker](https://www.docker.com/) and [docker-compose](https://docs.docker.com/compose/install/)._** 
+**_Running this project requires [docker](https://www.docker.com/) and [docker-compose](https://docs.docker.com/compose/install/) version 1.29.2._** 
 
 1. ``git clone https://github.com/Jepzter/jaeger-example.git``
 2. **Optional** Choose in docker-compose if you want passenger-service to be unstable and simulate errors. 
